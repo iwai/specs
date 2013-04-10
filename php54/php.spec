@@ -1108,6 +1108,14 @@ build --enable-fpm \
       ${without_shared}
 popd
 
+# Build for inclusion as embedded script language into applications,
+# /usr/lib[64]/libphp5.so
+pushd build-embedded
+build --enable-embed \
+      --without-mysql --disable-pdo \
+      ${without_shared}
+popd
+
 # Build a special thread-safe (mainly for modules)
 pushd build-ztscli
 
