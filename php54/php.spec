@@ -1,4 +1,4 @@
-%define _buildid .32
+%define _buildid .32.smv
 
 %bcond_with         systemd
 %bcond_with         interbase
@@ -32,15 +32,6 @@
 %else
 %global isasuffix %nil
 %endif
-
-# /usr/sbin/apsx with httpd < 2.4 and defined as /usr/bin/apxs with httpd >= 2.4
-%{!?_httpd_apxs:       %{expand: %%global _httpd_apxs       %%{_sbindir}/apxs}}
-%{!?_httpd_mmn:        %{expand: %%global _httpd_mmn        %%(cat %{_includedir}/httpd/.mmn 2>/dev/null || echo missing-httpd-devel)}}
-%{!?_httpd_confdir:    %{expand: %%global _httpd_confdir    %%{_sysconfdir}/httpd/conf.d}}
-# /etc/httpd/conf.d with httpd < 2.4 and defined as /etc/httpd/conf.modules.d with httpd >= 2.4
-%{!?_httpd_modconfdir: %{expand: %%global _httpd_modconfdir %%{_sysconfdir}/httpd/conf.d}}
-%{!?_httpd_moddir:     %{expand: %%global _httpd_moddir %%{_libdir}/httpd/modules}}
-%{!?_httpd_contentdir: %{expand: %%global _httpd_contentdir /var/www}}
 
 %if 0%{?fedora}%{?rhel} && 0%{?fedora} < 18 && 0%{?rhel} < 7
 %global with_zip     0
@@ -111,7 +102,7 @@ Patch47: php-5.4.9-phpinfo.patch
 # Fixes for tests
 
 BuildRequires: bzip2-devel, curl-devel >= 7.9, %{db_devel}, gmp-devel
-BuildRequires: httpd24-devel >= 2.0.46-1, pam-devel
+#BuildRequires: httpd24-devel >= 2.0.46-1, pam-devel
 BuildRequires: libstdc++-devel, openssl-devel
 BuildRequires: sqlite-devel >= 3.6.0
 BuildRequires: zlib-devel, smtpdaemon, libedit-devel
@@ -126,13 +117,9 @@ Obsoletes: php-dbg, php3, phpfi, stronghold-php, php-zts
 Provides: php-zts = %{version}-%{release}
 Provides: php-zts%{?_isa} = %{version}-%{release}
 
-Requires: httpd-mmn = %{_httpd_mmn}
-Provides: mod_php = %{version}-%{release}
 Requires: %{name}-common%{?_isa} = %{version}-%{release}
 # For backwards-compatibility, require php-cli for the time being:
 Requires: %{name}-cli%{?_isa} = %{version}-%{release}
-# To ensure correct /var/lib/php/session ownership:
-Requires(pre): httpd24
 
 %if %{name} != "php"
 Provides:  php = %{version}-%{release}
@@ -143,7 +130,6 @@ Conflicts: php < %{version}-%{release}
 # Don't provides extensions, which are not shared library, as .so
 %{?filter_provides_in: %filter_provides_in %{_libdir}/php/modules/.*\.so$}
 %{?filter_provides_in: %filter_provides_in %{_libdir}/php-zts/modules/.*\.so$}
-%{?filter_provides_in: %filter_provides_in %{_httpd_moddir}/.*\.so$}
 %{?filter_setup}
 
 
@@ -1114,30 +1100,10 @@ without_shared="--without-gd \
       --without-curl --disable-posix \
       --disable-sysvmsg --disable-sysvshm --disable-sysvsem"
 
-# Build Apache module, and the CLI SAPI, /usr/bin/php
-pushd build-apache
-build --with-apxs2=%{_httpd_apxs} \
-      --libdir=%{_libdir}/php \
-      --enable-pdo=shared \
-      --with-mysql=shared,%{_prefix} \
-      --with-mysqli=shared,%{mysql_config} \
-      --with-pdo-mysql=shared,%{mysql_config} \
-      --without-pdo-sqlite \
-      ${without_shared}
-popd
-
 # Build php-fpm
 pushd build-fpm
 build --enable-fpm \
       --libdir=%{_libdir}/php \
-      --without-mysql --disable-pdo \
-      ${without_shared}
-popd
-
-# Build for inclusion as embedded script language into applications,
-# /usr/lib[64]/libphp5.so
-pushd build-embedded
-build --enable-embed \
       --without-mysql --disable-pdo \
       ${without_shared}
 popd
@@ -1215,8 +1181,7 @@ popd
 
 # Build a special thread-safe Apache SAPI
 pushd build-zts
-build --with-apxs2=%{_httpd_apxs} \
-      --includedir=%{_includedir}/php-zts \
+build --includedir=%{_includedir}/php-zts \
       --libdir=%{_libdir}/php-zts \
       --enable-maintainer-zts \
       --with-config-file-scan-dir=%{_sysconfdir}/php-zts.d \
@@ -1286,43 +1251,19 @@ make -C build-cgi install \
      INSTALL_ROOT=$RPM_BUILD_ROOT
 
 # rename extensions build with mysqlnd
-mv $RPM_BUILD_ROOT%{_libdir}/php/modules/mysql.so \
+cp $RPM_BUILD_ROOT%{_libdir}/php/modules/mysql.so \
    $RPM_BUILD_ROOT%{_libdir}/php/modules/mysqlnd_mysql.so
-mv $RPM_BUILD_ROOT%{_libdir}/php/modules/mysqli.so \
+cp $RPM_BUILD_ROOT%{_libdir}/php/modules/mysqli.so \
    $RPM_BUILD_ROOT%{_libdir}/php/modules/mysqlnd_mysqli.so
-mv $RPM_BUILD_ROOT%{_libdir}/php/modules/pdo_mysql.so \
+cp $RPM_BUILD_ROOT%{_libdir}/php/modules/pdo_mysql.so \
    $RPM_BUILD_ROOT%{_libdir}/php/modules/pdo_mysqlnd.so
-
-# Install the mysql extension build with libmysql
-make -C build-apache install-modules \
-     INSTALL_ROOT=$RPM_BUILD_ROOT
 
 # Install the default configuration file and icons
 install -m 755 -d $RPM_BUILD_ROOT%{_sysconfdir}/
 install -m 644 %{SOURCE2} $RPM_BUILD_ROOT%{_sysconfdir}/php.ini
-install -m 755 -d $RPM_BUILD_ROOT%{_httpd_contentdir}/icons
-install -m 644 php.gif $RPM_BUILD_ROOT%{_httpd_contentdir}/icons/php.gif
 
 # For third-party packaging:
 install -m 755 -d $RPM_BUILD_ROOT%{_datadir}/php
-
-# install the DSO
-install -m 755 -d $RPM_BUILD_ROOT%{_httpd_moddir}
-install -m 755 build-apache/libs/libphp5.so $RPM_BUILD_ROOT%{_httpd_moddir}
-
-# install the ZTS DSO
-install -m 755 build-zts/libs/libphp5.so $RPM_BUILD_ROOT%{_httpd_moddir}/libphp5-zts.so
-
-# Apache config fragment
-%if "%{_httpd_modconfdir}" == "%{_httpd_confdir}"
-# Single config file with httpd < 2.4 (fedora <= 17)
-install -D -m 644 %{SOURCE9} $RPM_BUILD_ROOT%{_httpd_confdir}/php.conf
-cat %{SOURCE1} >>$RPM_BUILD_ROOT%{_httpd_confdir}/php.conf
-%else
-# Dual config file with httpd >= 2.4 (fedora >= 18)
-install -D -m 644 %{SOURCE9} $RPM_BUILD_ROOT%{_httpd_modconfdir}/10-php.conf
-install -D -m 644 %{SOURCE1} $RPM_BUILD_ROOT%{_httpd_confdir}/php.conf
-%endif
 
 install -m 755 -d $RPM_BUILD_ROOT%{_sysconfdir}/php.d
 install -m 755 -d $RPM_BUILD_ROOT%{_sysconfdir}/php-zts.d
@@ -1440,20 +1381,12 @@ rm -rf $RPM_BUILD_ROOT%{_libdir}/php/modules/*.a \
        $RPM_BUILD_ROOT%{_libdir}/php-zts/modules/*.a \
        $RPM_BUILD_ROOT%{_bindir}/{phptar} \
        $RPM_BUILD_ROOT%{_datadir}/pear \
-       $RPM_BUILD_ROOT%{_libdir}/libphp5.la
+       $RPM_BUILD_ROOT%{_libdir}/libphp5.la \
+       $RPM_BUILD_ROOT%{_libdir}/libphp5-5.4.so \
+       $RPM_BUILD_ROOT%{_libdir}/libphp5.so
 
 # Remove irrelevant docs
 rm -f README.{Zeus,QNX,CVS-RULES}
-
-
-%pre fpm
-# Add the "apache" user as we don't require httpd
-getent group  apache >/dev/null || \
-  groupadd -g 48 -r apache
-getent passwd apache >/dev/null || \
-  useradd -r -u 48 -g apache -s /sbin/nologin \
-    -d %{_httpd_contentdir} -c "Apache" apache
-exit 0
 
 %post fpm
 %if 0%{?systemd_post:1}
@@ -1512,14 +1445,7 @@ fi
 %postun embedded -p /sbin/ldconfig
 
 %files
-%{_httpd_moddir}/libphp5.so
-%{_httpd_moddir}/libphp5-zts.so
 %attr(0770,root,apache) %dir %{_localstatedir}/lib/php/session
-%config(noreplace) %{_httpd_confdir}/php.conf
-%if "%{_httpd_modconfdir}" != "%{_httpd_confdir}"
-%config(noreplace) %{_httpd_modconfdir}/10-php.conf
-%endif
-%{_httpd_contentdir}/icons/php.gif
 
 %files common -f files.common
 %doc CODING_STANDARDS CREDITS EXTENSIONS LICENSE NEWS README*
@@ -1582,10 +1508,6 @@ fi
 %{_mandir}/man1/php-config.1*
 %config %{_sysconfdir}/rpm/macros.php
 
-%files embedded
-%{_libdir}/libphp5.so
-%{_libdir}/libphp5-%{embed_version}.so
-
 %files pgsql -f files.pgsql
 %files mysql -f files.mysql
 %files odbc -f files.odbc
@@ -1623,6 +1545,9 @@ fi
 
 
 %changelog
+* Tue Apr 9 2013 Yuji Iwai <iwai@sonicmoov.com>
+- Without httpd
+
 * Tue Jan 22 2013 Lee Trager <ltrager@amazon.com>
 - Fix zip file enablement again
 - Fix broken logic for enabling zip support
