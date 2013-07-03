@@ -1,8 +1,7 @@
-%define _buildid .32.smv
+%define _buildid .37.smv
 
 %bcond_with         systemd
 %bcond_with         interbase
-%bcond_with         enchant
 
 %global contentdir  /var/www
 # API/ABI check
@@ -14,6 +13,9 @@
 %global pharver     2.0.1
 %global zipver      1.11.0
 %global jsonver     1.2.1
+
+# Adds -z now to the linker flags
+%global _hardened_build 1
 
 # version used for php embedded library soname
 %global embed_version 5.4
@@ -51,7 +53,7 @@
 
 Summary: PHP scripting language for creating dynamic web sites
 Name: php54
-Version: 5.4.11
+Version: 5.4.16
 Release: 1%{?_buildid}%{?dist}
 # All files licensed under PHP version 3.01, except
 # Zend is licensed under Zend
@@ -82,6 +84,13 @@ Patch8: php-5.4.7-libdb.patch
 # Fixes for extension modules
 # https://bugs.php.net/63171 no odbc call during timeout
 Patch21: php-5.4.7-odbctimer.patch
+# Fixed Bug #64949 (Buffer overflow in _pdo_pgsql_error)
+Patch22: php-5.4.16-pdopgsql.patch
+# Fixed bug #64960 (Segfault in gc_zval_possible_root)
+Patch23: php-5.4.16-gc.patch
+# Fixed Bug #64915 (error_log ignored when daemonize=0)
+Patch24: php-5.4.16-fpm.patch
+
 
 # Functional changes
 Patch40: php-5.4.0-dlopen.patch
@@ -90,7 +99,7 @@ Patch42: php-5.3.1-systzdata-v10.patch
 # See http://bugs.php.net/53436
 Patch43: php-5.4.0-phpize.patch
 # Use system libzip instead of bundled one
-Patch44: php-5.4.5-system-libzip.patch
+Patch44: php-5.4.15-system-libzip.patch
 # Use -lldap_r for OpenLDAP
 Patch45: php-5.4.8-ldap_r.patch
 # Make php_config.h constant across builds
@@ -100,9 +109,9 @@ Patch47: php-5.4.9-phpinfo.patch
 
 
 # Fixes for tests
+Patch60: php-5.4.16-pdotests.patch
 
-BuildRequires: bzip2-devel, curl-devel >= 7.9, %{db_devel}, gmp-devel
-#BuildRequires: httpd24-devel >= 2.0.46-1, pam-devel
+BuildRequires: bzip2-devel, curl-devel >= 7.9, gmp-devel
 BuildRequires: libstdc++-devel, openssl-devel
 BuildRequires: sqlite-devel >= 3.6.0
 BuildRequires: zlib-devel, smtpdaemon, libedit-devel
@@ -248,10 +257,13 @@ Provides: php-tokenizer, php-tokenizer%{?_isa}
 Provides: php-zip, php-zip%{?_isa}
 Provides: php-pecl-zip = %{zipver}, php-pecl-zip%{?_isa} = %{zipver}
 Provides: php-pecl(zip) = %{zipver}, php-pecl(zip)%{?_isa} = %{zipver}
-Obsoletes: php-pecl-zip
+Obsoletes: php-pecl-zip < 1.11
 %endif
 Provides: php-zlib, php-zlib%{?_isa}
-Obsoletes: php-openssl, php-pecl-json, php-json, php-pecl-phar, php-pecl-Fileinfo
+Obsoletes: php-openssl
+Obsoletes: php-pecl-json < 1.2.2
+Obsoletes: php-pecl-phar < 1.2.4
+Obsoletes: php-pecl-Fileinfo < 1.0.5
 Obsoletes: php-mhash < 5.3.0
 
 %if %{name} != "php"
@@ -670,6 +682,7 @@ Conflicts: php-dba < %{version}-%{release}
 %endif
 # All files licensed under PHP version 3.01
 License: PHP
+BuildRequires: %{db_devel}, tokyocabinet-devel
 Requires: php-common%{?_isa} = %{version}-%{release}
 
 %description dba
@@ -805,7 +818,6 @@ Conflicts: php-intl < %{version}-%{release}
 The php-intl package contains a dynamic shared object that will add
 support for using the ICU library to PHP.
 
-%if %{with enchant}
 %package enchant
 Summary: Human Language and Character Encoding Support
 Group: System Environment/Libraries
@@ -823,7 +835,6 @@ Conflicts: php-enchant < %{version}-%{release}
 %description enchant
 The php-intl package contains a dynamic shared object that will add
 support for using the enchant library to PHP.
-%endif
 
 %prep
 %setup -q -n php-%{version}%{?rcver}
@@ -834,6 +845,9 @@ support for using the enchant library to PHP.
 %patch8 -p1 -b .libdb
 
 %patch21 -p1 -b .odbctimer
+%patch22 -p1 -b .pdopgsql
+%patch23 -p1 -b .gc
+%patch24 -p1 -b .fpm
 
 %patch40 -p1 -b .dlopen
 %patch41 -p1 -b .easter
@@ -847,6 +861,8 @@ support for using the enchant library to PHP.
 %endif
 %patch46 -p1 -b .fixheader
 %patch47 -p1 -b .phpinfo
+
+%patch60 -p1 -b .pdotests
 
 # Prevent %%doc confusion over LICENSE files
 cp Zend/LICENSE Zend/ZEND_LICENSE
@@ -1005,10 +1021,8 @@ ln -sf ../configure
 	--with-layout=GNU \
 	--enable-exif \
 	--enable-ftp \
-	--enable-magic-quotes \
 	--enable-sockets \
 	--with-kerberos \
-	--enable-ucd-snmp-hack \
 	--enable-shmop \
 	--enable-calendar \
         --with-libxml-dir=%{_prefix} \
@@ -1028,8 +1042,7 @@ make %{?_smp_mflags}
 # Build /usr/bin/php-cgi with the CGI SAPI, and all the shared extensions
 pushd build-cgi
 
-build --enable-force-cgi-redirect \
-      --libdir=%{_libdir}/php \
+build --libdir=%{_libdir}/php \
       --enable-pcntl \
       --with-imap=shared --with-imap-ssl \
       --enable-mbstring=shared \
@@ -1037,6 +1050,7 @@ build --enable-force-cgi-redirect \
       --with-gd=shared \
       --enable-bcmath=shared \
       --enable-dba=shared --with-db4=%{_prefix} \
+                          --with-tcadb=%{_prefix} \
       --with-xmlrpc=shared \
       --with-ldap=shared --with-ldap-sasl \
       --enable-mysqlnd=shared \
@@ -1055,7 +1069,6 @@ build --enable-force-cgi-redirect \
       --with-xsl=shared,%{_prefix} \
       --enable-xmlreader=shared --enable-xmlwriter=shared \
       --with-curl=shared,%{_prefix} \
-      --enable-fastcgi \
       --enable-pdo=shared \
       --with-pdo-odbc=shared,unixODBC,%{_prefix} \
       --with-pdo-mysql=shared,mysqlnd \
@@ -1083,11 +1096,7 @@ build --enable-force-cgi-redirect \
       --enable-fileinfo=shared \
       --enable-intl=shared \
       --with-icu-dir=%{_prefix} \
-%if %{with enchant}
       --with-enchant=shared,%{_prefix} \
-%else
-      --with-enchant=no \
-%endif
       --with-recode=shared,%{_prefix}
 
 popd
@@ -1120,8 +1129,7 @@ popd
 pushd build-ztscli
 
 EXTENSION_DIR=%{_libdir}/php-zts/modules
-build --enable-force-cgi-redirect \
-      --includedir=%{_includedir}/php-zts \
+build --includedir=%{_includedir}/php-zts \
       --libdir=%{_libdir}/php-zts \
       --enable-maintainer-zts \
       --with-config-file-scan-dir=%{_sysconfdir}/php-zts.d \
@@ -1132,6 +1140,7 @@ build --enable-force-cgi-redirect \
       --with-gd=shared \
       --enable-bcmath=shared \
       --enable-dba=shared --with-db4=%{_prefix} \
+                          --with-tcadb=%{_prefix} \
       --with-xmlrpc=shared \
       --with-ldap=shared --with-ldap-sasl \
       --enable-mysqlnd=shared \
@@ -1151,7 +1160,6 @@ build --enable-force-cgi-redirect \
       --with-xsl=shared,%{_prefix} \
       --enable-xmlreader=shared --enable-xmlwriter=shared \
       --with-curl=shared,%{_prefix} \
-      --enable-fastcgi \
       --enable-pdo=shared \
       --with-pdo-odbc=shared,unixODBC,%{_prefix} \
       --with-pdo-mysql=shared,mysqlnd \
@@ -1179,11 +1187,7 @@ build --enable-force-cgi-redirect \
       --enable-fileinfo=shared \
       --enable-intl=shared \
       --with-icu-dir=%{_prefix} \
-%if %{with enchant}
       --with-enchant=shared,%{_prefix} \
-%else
-      --with-enchant=no \
-%endif
       --with-recode=shared,%{_prefix}
 popd
 
@@ -1229,12 +1233,13 @@ unset NO_INTERACTION REPORT_EXIT_STATUS MALLOC_CHECK_
 make -C build-ztscli install \
      INSTALL_ROOT=$RPM_BUILD_ROOT
 
+# do not move change copy by:iwai
 # rename extensions build with mysqlnd
-mv $RPM_BUILD_ROOT%{_libdir}/php-zts/modules/mysql.so \
+cp $RPM_BUILD_ROOT%{_libdir}/php-zts/modules/mysql.so \
    $RPM_BUILD_ROOT%{_libdir}/php-zts/modules/mysqlnd_mysql.so
-mv $RPM_BUILD_ROOT%{_libdir}/php-zts/modules/mysqli.so \
+cp $RPM_BUILD_ROOT%{_libdir}/php-zts/modules/mysqli.so \
    $RPM_BUILD_ROOT%{_libdir}/php-zts/modules/mysqlnd_mysqli.so
-mv $RPM_BUILD_ROOT%{_libdir}/php-zts/modules/pdo_mysql.so \
+cp $RPM_BUILD_ROOT%{_libdir}/php-zts/modules/pdo_mysql.so \
    $RPM_BUILD_ROOT%{_libdir}/php-zts/modules/pdo_mysqlnd.so
 
 # Install the extensions for the ZTS version modules for libmysql
@@ -1315,12 +1320,9 @@ for mod in pgsql mysql mysqli odbc ldap snmp xmlrpc imap \
     mysqlnd mysqlnd_mysql mysqlnd_mysqli pdo_mysqlnd \
     mbstring gd dom xsl soap bcmath dba xmlreader xmlwriter \
     pdo pdo_mysql pdo_pgsql pdo_odbc pdo_sqlite json %{zipmod} \
-    sqlite3 phar fileinfo intl \
+    sqlite3 phar fileinfo intl enchant \
 %if %{with interbase}
     interbase pdo_firebird \
-%endif
-%if %{with enchant}
-    enchant \
 %endif
     mcrypt tidy pdo_dblib mssql pspell curl wddx \
     posix sysvshm sysvsem sysvmsg recode; do
@@ -1389,9 +1391,7 @@ rm -rf $RPM_BUILD_ROOT%{_libdir}/php/modules/*.a \
        $RPM_BUILD_ROOT%{_libdir}/php-zts/modules/*.a \
        $RPM_BUILD_ROOT%{_bindir}/{phptar} \
        $RPM_BUILD_ROOT%{_datadir}/pear \
-       $RPM_BUILD_ROOT%{_libdir}/libphp5.la \
-       $RPM_BUILD_ROOT%{_libdir}/libphp5-5.4.so \
-       $RPM_BUILD_ROOT%{_libdir}/libphp5.so
+       $RPM_BUILD_ROOT%{_libdir}/libphp5.la
 
 # Remove irrelevant docs
 rm -f README.{Zeus,QNX,CVS-RULES}
@@ -1501,6 +1501,7 @@ fi
 %attr(770,apache,root) %dir %{_localstatedir}/log/php-fpm
 %dir %{_localstatedir}/run/php-fpm
 %{_mandir}/man8/php-fpm.8*
+%dir %{_datadir}/fpm
 %{_datadir}/fpm/status.html
 
 %files devel
@@ -1514,7 +1515,11 @@ fi
 %{_libdir}/php/build
 %{_libdir}/php-zts/build
 %{_mandir}/man1/php-config.1*
-%config %{_sysconfdir}/rpm/macros.php
+%{_sysconfdir}/rpm/macros.php
+
+%files embedded
+%{_libdir}/libphp5.so
+%{_libdir}/libphp5-%{embed_version}.so
 
 %files pgsql -f files.pgsql
 %files mysql -f files.mysql
@@ -1546,15 +1551,57 @@ fi
 %if %{with interbase}
 %files interbase -f files.interbase
 %endif
-%if %{with enchant}
 %files enchant -f files.enchant
-%endif
 %files mysqlnd -f files.mysqlnd
 
 
 %changelog
-* Tue Apr 9 2013 Yuji Iwai <iwai@sonicmoov.com>
+* Thu Jul 4 2013 Yuji Iwai <iwai@sonicmoov.com>
 - Without httpd
+
+* Mon Jun 24 2013 Lee Trager <ltrager@amazon.com>
+- import source package F17/php-5.4.16-1.fc17
+
+* Wed Jun  5 2013 Remi Collet <rcollet@redhat.com> 5.4.16-1
+- update to 5.4.16
+- patch for upstream Bug #64915 error_log ignored when daemonize=0
+- patch for upstream Bug #64949 Buffer overflow in _pdo_pgsql_error
+- patch for upstream bug #64960 Segfault in gc_zval_possible_root
+
+* Tue May 21 2013 Lee Trager <ltrager@amazon.com>
+- import source package F17/php-5.4.15-1.fc17
+
+* Thu May  9 2013 Remi Collet <rcollet@redhat.com> 5.4.15-1
+- update to 5.4.15
+- add version to "Obsoletes"
+- own /usr/share/fpm
+
+* Thu Apr 11 2013 Remi Collet <rcollet@redhat.com> 5.4.14-1
+- update to 5.4.14
+- clean old deprecated options
+
+* Wed Apr 3 2013 Lee Trager <ltrager@amazon.com>
+- import source package F17/php-5.4.13-1.fc17
+
+* Thu Mar 14 2013 Remi Collet <rcollet@redhat.com> 5.4.13-1
+- update to 5.4.13
+- security fix for CVE-2013-1643
+- Hardened build (links with -z now option)
+- Remove %%config from %%{_sysconfdir}/rpm/macros.*
+  (https://fedorahosted.org/fpc/ticket/259).
+
+* Wed Feb 20 2013 Lee Trager <ltrager@amazon.com>
+- Enable enchant support
+
+* Wed Feb 20 2013 Remi Collet <remi@fedoraproject.org> 5.4.12-1
+- update to 5.4.12
+- security fix for CVE-2013-1635
+- enable tokyocabinet dba handler
+- upstream patch (5.4.13) to fix dval to lval conversion
+  https://bugs.php.net/64142
+- upstream patch (5.4.13) for 2 failed tests
+- fix buit-in web server on ppc64 (fdset usage)
+  https://bugs.php.net/64128
 
 * Tue Jan 22 2013 Lee Trager <ltrager@amazon.com>
 - Fix zip file enablement again
